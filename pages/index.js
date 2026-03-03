@@ -269,7 +269,7 @@ export default function Home() {
         .row-actions{display:flex;gap:10px;margin-top:24px;}
         .error-msg{color:var(--accent2);font-size:12px;margin-top:8px;}
         .charges-info{margin-top:8px;font-size:11px;color:var(--muted);}
-        .signature{margin-top:32px;text-align:center;font-size:11px;color:var(--muted);opacity:0.55;}
+        .signature{margin-top:32px;text-align:center;font-size:13px;font-family:'Syne',sans-serif;letter-spacing:0.04em;color:var(--muted);opacity:0.7;}
       `}</style>
 
       <header>
@@ -325,7 +325,15 @@ export default function Home() {
             <div className="add-row">
               <input className="text-input" value={personInput} placeholder="Enter name..."
                 onChange={e => setPersonInput(e.target.value)}
-                onKeyDown={e => { if(e.key==='Enter'&&!e.isComposing){e.preventDefault();addPerson();}}} />
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    if (e.isComposing) return;
+                    e.preventDefault();
+                    addPerson();
+                    // IME에서 남는 마지막 글자를 완전히 비우기 위해 DOM 값도 초기화
+                    setTimeout(() => { if (e.target) e.target.value = ''; }, 0);
+                  }
+                }} />
               <button className="btn btn-primary" onClick={addPerson}>+ Add</button>
             </div>
             <div className="row-actions">
