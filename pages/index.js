@@ -6,42 +6,47 @@ const COLORS = ['#c8f135','#ff6b35','#35b5ff','#ff35a8','#35ffd4','#ffcc35','#a8
 function parseItems(data) {
   const result = [];
   const charges = { tax: 0, service: 0, others: [] };
+  
   try {
-    const fields = data?.result?.fields || data?.fields || {};
-    const menuArr = fields?.menu?.value || [];
-    if (Array.isArray(menuArr)) {
-      for (const item of menuArr) {
-        const name = String(item?.nm?.value ?? item?.name?.value ?? item?.text ?? '').trim();
-        const rawPrice = item?.price?.value ?? item?.unitprice?.value ?? item?.cnt?.value ?? '';
-        const price = parseFloat(String(rawPrice).replace(/[^0-9.]/g, ''));
-        if (name && price > 0) result.push({ name, price });
+    const fields = data?.fields || [];
+    
+    // 메뉴 아이템: type이 "group"인 것들
+    const groups = fields.filter(f => f.type === 'group');
+    for (const group of groups) {
+      const props = group.properties || [];
+      const nameProp = props.find(p => p.key.includes('product_name'));
+      const priceProp = props.find(p => p.key.includes('unit_product_total_price_before_discount')) 
+                     || props.find(p => p.key.includes('unit_product_price'));
+      
+      const name = nameProp?.refinedValue?.trim();
+      const price = parseFloat(String(priceProp?.refinedValue || '').replace(/[^0-9.]/g, ''));
+      
+      if (name && price > 0) {
+        // 이름에서 "1x", "2x" 같은 prefix 정리
+        const cleanName = name.replace(/^\d+x/, '').replace(/CHF$/, '').trim();
+        result.push({ name: cleanName, price });
       }
     }
-    if (fields?.total_tax_price?.value) {
-      const t = parseFloat(String(fields.total_tax_price.value).replace(/[^0-9.]/g, '')) || 0;
-      if (t > 0) charges.tax = t;
+    
+    // 세금
+    const taxField = fields.find(f => f.key === 'total.tax_price' && f.type === 'content');
+    if (taxField) {
+      const tax = parseFloat(String(taxField.refinedValue).replace(/[^0-9.]/g, ''));
+      if (tax > 0) charges.tax = tax;
     }
-    ['service_charge','service_fee','total_service_price'].forEach(k => {
-      const v = fields?.[k]?.value;
-      if (!v) return;
-      const n = parseFloat(String(v).replace(/[^0-9.]/g, '')) || 0;
-      if (n > 0) charges.service = Math.max(charges.service, n);
-    });
-    if (result.length === 0) {
-      Object.entries(fields || {}).forEach(([key, val]) => {
-        const k = key.toLowerCase();
-        const raw = val?.value ?? val?.amount ?? val?.text ?? '';
-        const num = parseFloat(String(raw).replace(/[^0-9.\-]/g, ''));
-        if (!num || num <= 0) return;
-        if (/tax|vat|gst/.test(k)) charges.tax = Math.max(charges.tax, num);
-        else if (/service|svc/.test(k)) charges.service = Math.max(charges.service, num);
-        else if (/tip/.test(k)) charges.others.push({ label: 'Tip', amount: num });
-      });
+    
+    // 총액 (참고용)
+    const totalField = fields.find(f => f.key === 'total.charged_price' && f.type === 'content');
+    if (totalField) {
+      // 필요시 사용
     }
+    
   } catch(e) {}
+  
   if (result.length === 0) {
     return { items: [{name:'Demo Burger',price:12},{name:'Demo Pasta',price:15},{name:'Demo Juice',price:6}], charges };
   }
+  
   return { items: result, charges };
 }
 
