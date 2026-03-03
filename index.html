@@ -486,7 +486,7 @@
     display: none;
   }
 
-  .currency-sym { font-size: 14px; opacity: 0.7; }
+  .currency-sym { font-size: 14px; opacity: 0.7; margin-right: 2px; }
 </style>
 </head>
 <body class="tag-colors">
@@ -808,10 +808,15 @@ function renderItemsTable() {
       label.className = 'person-check' + (assigned.includes(name) ? ' checked' : '');
       label.style.setProperty('--pc', COLORS[pi % COLORS.length]);
       label.innerHTML = `<input type="checkbox" ${assigned.includes(name) ? 'checked' : ''}><span style="color:${COLORS[pi%COLORS.length]}">${name}</span>`;
-      label.addEventListener('click', () => {
-        const checked = !assigned.includes(name);
-        if (checked) { if (!assignments[i].includes(name)) assignments[i].push(name); }
-        else { assignments[i] = assignments[i].filter(n => n !== name); }
+      label.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const current = assignments[i] || [];
+        if (current.includes(name)) {
+          assignments[i] = current.filter(n => n !== name);
+        } else {
+          assignments[i] = [...current, name];
+        }
         renderItemsTable();
       });
       checksDiv.appendChild(label);
@@ -937,7 +942,9 @@ function goToPanel(n) {
 }
 
 function formatCurrency(n) {
-  return isNaN(n) ? '—' : `<span class="currency-sym"></span>${parseFloat(n).toFixed(2)}`;
+  if (isNaN(n)) return '—';
+  const value = parseFloat(n).toFixed(2);
+  return `<span class="currency-sym">$</span>${value}`;
 }
 
 document.getElementById('btnReset').addEventListener('click', () => {
