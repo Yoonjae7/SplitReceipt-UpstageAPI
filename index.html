@@ -668,8 +668,9 @@ btnScan.addEventListener('click', async () => {
   try {
     const formData = new FormData();
     formData.append('document', uploadedFile);
+    formData.append('model', 'receipt-extraction-3.2.0');
 
-    const res = await fetch('https://api.upstage.ai/v1/document-ai/extraction/receipt', {
+    const res = await fetch('https://api.upstage.ai/v1/information-extraction', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiKey}` },
       body: formData
@@ -701,60 +702,94 @@ function parseItems(data) {
   const result = [];
   const detectedCharges = { tax: 0, service: 0, others: [] };
   try {
-    // Try tables first (line items)
-    const tables = data?.result?.tables || data?.tables || [];
-    for (const table of tables) {
-      const rows = table?.rows || [];
-      for (const row of rows) {
-        const cells = row?.cells || [];
-        if (cells.length >= 2) {
-          const name = cells[0]?.text?.trim();
-          const priceCell = cells.find(c => /[\d.]+/.test(c?.text));
-          const price = priceCell ? parseFloat(priceCell.text.replace(/[^0-9.]/g, '')) : 0;
-          if (!name || price <= 0) continue;
+    const fields = data?.result?.fields || data?.fields || {};
 
-          const lowerName = name.toLowerCase();
-          if (/tax|vat|gst/.test(lowerName)) {
-            detectedCharges.tax += price;
-            continue;
-          }
-          if (/service|svc|charge/.test(lowerName)) {
-            detectedCharges.service += price;
-            continue;
-          }
-          if (/tip/.test(lowerName)) {
-            detectedCharges.others.push({ label: 'Tip', amount: price });
-            continue;
-          }
+    // 1) Official menu structure (per docs)
+    const menuArr = fields?.menu?.value || [];
+    if (Array.isArray(menuArr)) {
+      for (const item of menuArr) {
+        const nameRaw = item?.nm?.value ?? item?.name?.value ?? item?.text ?? '';
+        const rawPrice = item?.price?.value ?? item?.unitprice?.value ?? item?.cnt?.value ?? '';
+        const price = parseFloat(String(rawPrice).replace(/[^0-9.]/g, ''));
+        const name = String(nameRaw).trim();
+        if (name && price > 0) {
           result.push({ name, price });
         }
       }
     }
 
-    // Fallback: key-value pairs
+    // Official tax field
+    if (fields?.total_tax_price?.value) {
+      const taxVal = parseFloat(String(fields.total_tax_price.value).replace(/[^0-9.]/g, '')) || 0;
+      if (taxVal > 0) detectedCharges.tax = taxVal;
+    }
+
+    // Try some common service-fee style fields
+    const serviceCandidates = ['service_charge', 'service_fee', 'total_service_price'];
+    serviceCandidates.forEach(key => {
+      const v = fields?.[key]?.value;
+      if (!v) return;
+      const num = parseFloat(String(v).replace(/[^0-9.]/g, '')) || 0;
+      if (num > 0) detectedCharges.service = Math.max(detectedCharges.service, num);
+    });
+
+    // 2) If still no items, fall back to generic structures we used before
     if (result.length === 0) {
-      const kv = data?.result?.fields || data?.fields || {};
-      const menuItems = kv?.menu?.value || kv?.items?.value || [];
-      for (const item of menuItems) {
-        const name = item?.nm?.value || item?.name?.value || item?.text || '';
-        const price = parseFloat((item?.price?.value || item?.cnt?.value || '0').replace(/[^0-9.]/g, ''));
-        if (name && price > 0) result.push({ name, price });
+      // Try tables (line items)
+      const tables = data?.result?.tables || data?.tables || [];
+      for (const table of tables) {
+        const rows = table?.rows || [];
+        for (const row of rows) {
+          const cells = row?.cells || [];
+          if (cells.length >= 2) {
+            const name = cells[0]?.text?.trim();
+            const priceCell = cells.find(c => /[\d.]+/.test(c?.text));
+            const price = priceCell ? parseFloat(priceCell.text.replace(/[^0-9.]/g, '')) : 0;
+            if (!name || price <= 0) continue;
+
+            const lowerName = name.toLowerCase();
+            if (/tax|vat|gst/.test(lowerName)) {
+              detectedCharges.tax += price;
+              continue;
+            }
+            if (/service|svc|charge/.test(lowerName)) {
+              detectedCharges.service += price;
+              continue;
+            }
+            if (/tip/.test(lowerName)) {
+              detectedCharges.others.push({ label: 'Tip', amount: price });
+              continue;
+            }
+            result.push({ name, price });
+          }
+        }
       }
 
-      // Try generic fields for tax / service / tip
-      Object.entries(kv || {}).forEach(([key, val]) => {
-        const keyLower = key.toLowerCase();
-        const raw = val?.value ?? val?.amount ?? val?.text ?? '';
-        const num = parseFloat(String(raw).replace(/[^0-9.\-]/g, ''));
-        if (!num || num <= 0) return;
-        if (/tax|vat|gst/.test(keyLower)) {
-          detectedCharges.tax = Math.max(detectedCharges.tax, num);
-        } else if (/service|svc|charge/.test(keyLower)) {
-          detectedCharges.service = Math.max(detectedCharges.service, num);
-        } else if (/tip/.test(keyLower)) {
-          detectedCharges.others.push({ label: 'Tip', amount: num });
+      // Fallback: key-value pairs
+      if (result.length === 0) {
+        const kv = fields;
+        const menuItems = kv?.menu?.value || kv?.items?.value || [];
+        for (const item of menuItems) {
+          const name = item?.nm?.value || item?.name?.value || item?.text || '';
+          const price = parseFloat((item?.price?.value || item?.cnt?.value || '0').replace(/[^0-9.]/g, ''));
+          if (name && price > 0) result.push({ name, price });
         }
-      });
+
+        // Try generic fields for tax / service / tip
+        Object.entries(kv || {}).forEach(([key, val]) => {
+          const keyLower = key.toLowerCase();
+          const raw = val?.value ?? val?.amount ?? val?.text ?? '';
+          const num = parseFloat(String(raw).replace(/[^0-9.\-]/g, ''));
+          if (!num || num <= 0) return;
+          if (/tax|vat|gst/.test(keyLower)) {
+            detectedCharges.tax = Math.max(detectedCharges.tax, num);
+          } else if (/service|svc|charge/.test(keyLower)) {
+            detectedCharges.service = Math.max(detectedCharges.service, num);
+          } else if (/tip/.test(keyLower)) {
+            detectedCharges.others.push({ label: 'Tip', amount: num });
+          }
+        });
+      }
     }
   } catch(e) {}
 
