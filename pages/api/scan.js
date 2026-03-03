@@ -1,7 +1,6 @@
 import formidable from 'formidable';
 import fs from 'fs';
-import FormData from 'form-data';
-import fetch from 'node-fetch';
+import OpenAI from 'openai';
 
 export const config = { api: { bodyParser: false } };
 
@@ -15,25 +14,54 @@ export default async function handler(req, res) {
     if (!file) return res.status(400).json({ error: 'No file' });
 
     try {
-      const formData = new FormData();
-      formData.append('document', fs.createReadStream(file.filepath), {
-        filename: file.originalFilename || 'receipt.jpg',
-        contentType: file.mimetype || 'image/jpeg',
-      });
-      formData.append('model', 'receipt-extraction-3.2.0');
+      const base64Image = fs.readFileSync(file.filepath, 'base64');
+      const mimeType = file.mimetype || 'image/jpeg';
 
-      const upstageRes = await fetch('https://api.upstage.ai/v1/information-extraction', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${process.env.UPSTAGE_API_KEY}`,
-          ...formData.getHeaders(),
-        },
-        body: formData,
+      const openai = new OpenAI({
+        apiKey: process.env.UPSTAGE_API_KEY,
+        baseURL: 'https://api.upstage.ai/v1/information-extraction',
       });
 
-      const data = await upstageRes.json();
-      if (!upstageRes.ok) return res.status(upstageRes.status).json({ error: data?.message || 'Upstage error' });
-      return res.status(200).json(data);
+      const response = await openai.chat.completions.create({
+        model: 'receipt-extraction-3.2.0',
+        messages: [{
+          role: 'user',
+          content: [{
+            type: 'image_url',
+            image_url: {
+              url: `data:${mimeType};base64,${base64Image}`,
+            },
+          }],
+        }],
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'receipt_schema',
+            schema: {
+              type: 'object',
+              properties: {
+                menu: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      nm: { type: 'string', description: 'Item name' },
+                      price: { type: 'number', description: 'Item price' },
+                    }
+                  }
+                },
+                total_price: { type: 'number', description: 'Total price' },
+                tax_price: { type: 'number', description: 'Tax amount' },
+                service_price: { type: 'number', description: 'Service charge' },
+              }
+            }
+          }
+        }
+      });
+
+      // response 그대로 프론트로 보내서 구조 확인
+      return res.status(200).json(response);
+
     } catch (e) {
       return res.status(500).json({ error: e.message });
     }
