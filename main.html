@@ -574,9 +574,11 @@
     </table>
 
     <div class="total-row">
-      <span class="total-label">Total</span>
+      <span class="total-label">Total (incl. tax/fees)</span>
       <span class="total-value" id="totalAmount">—</span>
     </div>
+
+    <div id="chargesInfo" style="margin-top:8px;font-size:11px;color:var(--muted);"></div>
 
     <div class="row-actions">
       <button class="btn btn-primary" id="btnCalculate">Calculate Split →</button>
@@ -620,6 +622,7 @@ let people = [];
 let items = [];
 let assignments = {}; // itemIdx -> [personName, ...]
 let uploadedFile = null;
+let charges = { tax: 0, service: 0, others: [] }; // extra charges parsed from receipt
 
 // Elements
 const uploadZone = document.getElementById('uploadZone');
@@ -674,7 +677,9 @@ btnScan.addEventListener('click', async () => {
 
     if (!res.ok) throw new Error(`API error: ${res.status}`);
     const data = await res.json();
-    items = parseItems(data);
+    const parsed = parseItems(data);
+    items = parsed.items;
+    charges = parsed.charges;
 
     if (items.length === 0) {
       alert('No items found. Try a clearer receipt image.');
@@ -694,6 +699,7 @@ btnScan.addEventListener('click', async () => {
 
 function parseItems(data) {
   const result = [];
+  const detectedCharges = { tax: 0, service: 0, others: [] };
   try {
     // Try tables first (line items)
     const tables = data?.result?.tables || data?.tables || [];
@@ -705,7 +711,22 @@ function parseItems(data) {
           const name = cells[0]?.text?.trim();
           const priceCell = cells.find(c => /[\d.]+/.test(c?.text));
           const price = priceCell ? parseFloat(priceCell.text.replace(/[^0-9.]/g, '')) : 0;
-          if (name && price > 0) result.push({ name, price });
+          if (!name || price <= 0) continue;
+
+          const lowerName = name.toLowerCase();
+          if (/tax|vat|gst/.test(lowerName)) {
+            detectedCharges.tax += price;
+            continue;
+          }
+          if (/service|svc|charge/.test(lowerName)) {
+            detectedCharges.service += price;
+            continue;
+          }
+          if (/tip/.test(lowerName)) {
+            detectedCharges.others.push({ label: 'Tip', amount: price });
+            continue;
+          }
+          result.push({ name, price });
         }
       }
     }
@@ -719,19 +740,37 @@ function parseItems(data) {
         const price = parseFloat((item?.price?.value || item?.cnt?.value || '0').replace(/[^0-9.]/g, ''));
         if (name && price > 0) result.push({ name, price });
       }
+
+      // Try generic fields for tax / service / tip
+      Object.entries(kv || {}).forEach(([key, val]) => {
+        const keyLower = key.toLowerCase();
+        const raw = val?.value ?? val?.amount ?? val?.text ?? '';
+        const num = parseFloat(String(raw).replace(/[^0-9.\-]/g, ''));
+        if (!num || num <= 0) return;
+        if (/tax|vat|gst/.test(keyLower)) {
+          detectedCharges.tax = Math.max(detectedCharges.tax, num);
+        } else if (/service|svc|charge/.test(keyLower)) {
+          detectedCharges.service = Math.max(detectedCharges.service, num);
+        } else if (/tip/.test(keyLower)) {
+          detectedCharges.others.push({ label: 'Tip', amount: num });
+        }
+      });
     }
   } catch(e) {}
 
   // Demo fallback if nothing parsed
   if (result.length === 0) {
-    return [
+    return {
+      items: [
       { name: 'Item 1', price: 12.00 },
       { name: 'Item 2', price: 8.50 },
       { name: 'Item 3', price: 15.00 },
-    ];
+    ],
+      charges: { tax: 0, service: 0, others: [] }
+    };
   }
 
-  return result;
+  return { items: result, charges: detectedCharges };
 }
 
 // People management
@@ -830,7 +869,35 @@ function renderItemsTable() {
     });
   });
 
-  document.getElementById('totalAmount').textContent = formatCurrency(total);
+  // Items subtotal
+  const itemsSubtotal = total;
+
+  // Extra charges
+  const extraTotal =
+    (charges.tax || 0) +
+    (charges.service || 0) +
+    (charges.others || []).reduce((acc, c) => acc + (c.amount || 0), 0);
+
+  const grandTotal = itemsSubtotal + extraTotal;
+  document.getElementById('totalAmount').textContent = formatCurrency(grandTotal);
+
+  // Show charge breakdown + effective rates
+  const chargesInfoEl = document.getElementById('chargesInfo');
+  if (chargesInfoEl) {
+    const bits = [];
+    if (charges.tax) {
+      const rate = itemsSubtotal > 0 ? ((charges.tax / itemsSubtotal) * 100).toFixed(1) : null;
+      bits.push(`Tax ${rate ? `(~${rate}% of items)` : ''}: ${formatCurrency(charges.tax)}`);
+    }
+    if (charges.service) {
+      const rate = itemsSubtotal > 0 ? ((charges.service / itemsSubtotal) * 100).toFixed(1) : null;
+      bits.push(`Service ${rate ? `(~${rate}% of items)` : ''}: ${formatCurrency(charges.service)}`);
+    }
+    (charges.others || []).forEach(c => {
+      bits.push(`${c.label || 'Other'}: ${formatCurrency(c.amount || 0)}`);
+    });
+    chargesInfoEl.innerHTML = bits.join(' · ');
+  }
 }
 
 document.getElementById('btnCalculate').addEventListener('click', () => {
@@ -856,6 +923,27 @@ function renderResults() {
       totals[name] = (totals[name] || 0) + share;
       breakdown[name].push({ name: item.name, share, count: assigned.length });
     });
+  });
+
+  // Distribute extra charges equally across all people
+  const numPeople = people.length || 1;
+  const perPersonTax = charges.tax ? charges.tax / numPeople : 0;
+  const perPersonService = charges.service ? charges.service / numPeople : 0;
+  const perPersonOthers = (charges.others || []).reduce((acc, c) => acc + (c.amount || 0), 0) / numPeople;
+
+  people.forEach(name => {
+    if (perPersonTax) {
+      totals[name] = (totals[name] || 0) + perPersonTax;
+      breakdown[name].push({ name: 'Tax (equal share)', share: perPersonTax, count: numPeople });
+    }
+    if (perPersonService) {
+      totals[name] = (totals[name] || 0) + perPersonService;
+      breakdown[name].push({ name: 'Service (equal share)', share: perPersonService, count: numPeople });
+    }
+    if (perPersonOthers) {
+      totals[name] = (totals[name] || 0) + perPersonOthers;
+      breakdown[name].push({ name: 'Other fees (equal share)', share: perPersonOthers, count: numPeople });
+    }
   });
 
   const maxTotal = Math.max(...Object.values(totals));
@@ -955,7 +1043,7 @@ function formatCurrency(n) {
 }
 
 document.getElementById('btnReset').addEventListener('click', () => {
-  people = []; items = []; assignments = {}; uploadedFile = null;
+  people = []; items = []; assignments = {}; uploadedFile = null; charges = { tax: 0, service: 0, others: [] };
   document.getElementById('uploadPreview').style.display = 'none';
   fileInput.value = '';
   btnScan.disabled = true;
