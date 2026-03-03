@@ -61,6 +61,20 @@ function parseItems(data) {
         amount: roundingTotal
       });
     }
+
+    // Upstage total.charged_price가 있을 경우, 서비스 차지를 못 찾았으면 역산해서 보정
+    const totalField = fields.find(f => f.key === 'total.charged_price' && f.type === 'content');
+    if (totalField) {
+      const apiTotal = parseFloat(String(totalField.refinedValue ?? '').replace(/[^0-9.\-]/g, '')) || 0;
+      if (apiTotal > 0) {
+        const itemsSubtotal = result.reduce((a, item) => a + (item.price || 0), 0);
+        const othersSum = (charges.others || []).reduce((a, c) => a + (c.amount || 0), 0);
+        const inferredService = apiTotal - (itemsSubtotal + (charges.tax || 0) + othersSum);
+        if (!charges.service && inferredService > 0.01) {
+          charges.service = inferredService;
+        }
+      }
+    }
     
   } catch(e) {}
   
