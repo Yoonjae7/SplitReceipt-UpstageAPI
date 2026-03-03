@@ -34,11 +34,32 @@ function parseItems(data) {
       const tax = parseFloat(String(taxField.refinedValue).replace(/[^0-9.]/g, ''));
       if (tax > 0) charges.tax = tax;
     }
-    
-    // 총액 (참고용)
-    const totalField = fields.find(f => f.key === 'total.charged_price' && f.type === 'content');
-    if (totalField) {
-      // 필요시 사용
+
+    // 서비스 차지 (service charge / service fee 등)
+    const serviceFields = fields.filter(
+      f => f.type === 'content' && /service/i.test(f.key || '')
+    );
+    let serviceTotal = 0;
+    for (const sf of serviceFields) {
+      const n = parseFloat(String(sf.refinedValue ?? '').replace(/[^0-9.\-]/g, '')) || 0;
+      if (n > 0) serviceTotal += n;
+    }
+    if (serviceTotal > 0) charges.service = serviceTotal;
+
+    // 반올림 / Rounding (rounding, round_down, round_up 등 키 추정)
+    const roundingFields = fields.filter(
+      f => f.type === 'content' && /(round|adjust)/i.test(f.key || '')
+    );
+    let roundingTotal = 0;
+    for (const rf of roundingFields) {
+      const n = parseFloat(String(rf.refinedValue ?? '').replace(/[^0-9.\-]/g, '')) || 0;
+      roundingTotal += n;
+    }
+    if (roundingTotal !== 0) {
+      charges.others.push({
+        label: 'Rounding',
+        amount: roundingTotal
+      });
     }
     
   } catch(e) {}
