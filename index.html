@@ -756,7 +756,14 @@ function renderPeople() {
 }
 
 btnAddPerson.addEventListener('click', addPerson);
-personInput.addEventListener('keydown', e => { if (e.key === 'Enter') addPerson(); });
+personInput.addEventListener('keydown', e => {
+  // Avoid double-submit / split names when using IME (e.g. Korean)
+  if (e.isComposing || e.keyCode === 229) return;
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    addPerson();
+  }
+});
 
 function addPerson() {
   const name = personInput.value.trim();
