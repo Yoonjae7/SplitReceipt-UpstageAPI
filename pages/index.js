@@ -144,7 +144,7 @@ export default function Home() {
     if (!name) return;
     // IME 입력(예: 정현) 시 마지막 한 글자가 중복으로 추가되는 현상 방지
     if (name.length === 1 && people.some(p => p.endsWith(name))) return;
-    if (people.includes(name) || people.length >= 8) return;
+    if (people.includes(name) || people.length >= 18) return;
     setPeople([...people, name]);
     setPersonInput('');
   };
