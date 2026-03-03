@@ -1,40 +1,52 @@
-## SplitReceipt (Upstage API Demo)
+# SplitReceipt (Upstage API)
 
-Simple web app to **scan a receipt with Upstage Document AI** and **split the bill** between friends.
+SplitReceipt is a small Next.js app that lets you upload a receipt image and automatically extract line items using the Upstage Information Extraction API, then interactively split the bill among people.
 
-- **Upload a receipt** image or PDF.
-- **Scan** via Upstage Document AI Receipt Extraction.
-- **Add people** at the table.
-- **Assign items** to each person (supports shared items).
-- **See the split** with per‑person totals and charts.
+## Tech stack
 
-## Live Demo / Hosting
+- Next.js 14 (Pages Router)
+- React 18
+- API route using:
+  - `formidable` for file uploads
+  - `form-data` and `node-fetch` to call the Upstage API
 
-You can deploy this easily on Vercel:
+## Local development
 
-1. Import this GitHub repo into Vercel.
-2. Framework preset: **“Other / Static HTML”** (or equivalent).
-3. Build command: **none** (static).
-4. Output directory: **root** (where `main.html` lives).
-
-## Using Your Upstage API Key
-
-1. Go to the deployed site (or open `main.html` locally).
-2. Paste your **Upstage API key** (e.g. `up_xxx...`) into the **API Key** field at the top.
-3. Upload a receipt and click **“Scan Receipt →”**.
-
-The key is **not stored in the repo**; it’s only used in your browser to call:
-
-- `POST https://api.upstage.ai/v1/document-ai/extraction/receipt`
-
-with `Authorization: Bearer <YOUR_KEY>`.
-
-## Local Development
-
-Just open `main.html` in a browser:
+1. Install dependencies:
 
 ```bash
-open main.html
+npm install
 ```
 
-or serve it with any static server.
+2. Create a `.env.local` file in the project root:
+
+```bash
+UPSTAGE_API_KEY=your_real_upstage_key_here
+```
+
+3. Start the dev server:
+
+```bash
+npm run dev
+```
+
+Then open `http://localhost:3000` in your browser.
+
+## Environment variables
+
+- **`UPSTAGE_API_KEY`** (required): Your Upstage Information Extraction API key.
+
+In production (e.g. on Vercel), set this in the project’s **Settings → Environment Variables**. Do **not** commit this value to Git.
+
+## Deployment (Vercel)
+
+1. Push this repository to GitHub.
+2. In Vercel, create a new project from this GitHub repo.
+3. In the project’s **Settings → Environment Variables**, add:
+
+   - Name: `UPSTAGE_API_KEY`  
+   - Value: your real Upstage API key  
+   - Environment: Production (and Preview/Development if desired)
+
+4. Trigger a deployment (or let Vercel auto-deploy from `main`).
+
