@@ -106,7 +106,10 @@ export default function Home() {
 
   const addPerson = () => {
     const name = personInput.trim();
-    if (!name || people.includes(name) || people.length >= 8) return;
+    if (!name) return;
+    // IME 입력(예: 정현) 시 마지막 한 글자가 중복으로 추가되는 현상 방지
+    if (name.length === 1 && people.some(p => p.endsWith(name))) return;
+    if (people.includes(name) || people.length >= 8) return;
     setPeople([...people, name]);
     setPersonInput('');
   };
@@ -193,6 +196,9 @@ export default function Home() {
       <Head>
         <title>SplitReceipt</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="description" content="AI powered bill splitter by Yoonjae" />
+        <meta property="og:title" content="SplitReceipt by Yoonjae" />
+        <meta property="og:description" content="AI powered bill splitter by Yoonjae" />
         <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
       </Head>
       <style>{`
@@ -263,6 +269,7 @@ export default function Home() {
         .row-actions{display:flex;gap:10px;margin-top:24px;}
         .error-msg{color:var(--accent2);font-size:12px;margin-top:8px;}
         .charges-info{margin-top:8px;font-size:11px;color:var(--muted);}
+        .signature{margin-top:32px;text-align:center;font-size:11px;color:var(--muted);opacity:0.55;}
       `}</style>
 
       <header>
@@ -431,6 +438,7 @@ export default function Home() {
             </div>
           </div>
         )}
+        <div className="signature">SplitReceipt by Yoonjae</div>
       </div>
     </>
   );
