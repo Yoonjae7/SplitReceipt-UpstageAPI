@@ -78,8 +78,9 @@ function parseItems(data) {
     
   } catch(e) {}
   
+  // If nothing valid was parsed, return empty items so caller can show a proper error
   if (result.length === 0) {
-    return { items: [{name:'Demo Burger',price:12},{name:'Demo Pasta',price:15},{name:'Demo Juice',price:6}], charges };
+    return { items: [], charges };
   }
   
   return { items: result, charges };
@@ -125,6 +126,11 @@ export default function Home() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
       const parsed = parseItems(data);
+      if (!parsed.items || parsed.items.length === 0) {
+        setError(`This isn't a reciept, are you dumb or something?`);
+        setApiStatus('error');
+        return;
+      }
       setItems(parsed.items);
       setCharges(parsed.charges);
       const a = {};
@@ -238,13 +244,13 @@ export default function Home() {
       </Head>
       <style>{`
         ${pulse}
-        header{padding:28px 40px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:var(--bg);z-index:100;}
-        .logo{font-family:'Syne',sans-serif;font-weight:800;font-size:22px;letter-spacing:-0.5px;}
+        header{padding:20px 20px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:var(--bg);z-index:100;}
+        .logo{font-family:'Syne',sans-serif;font-weight:800;font-size:20px;letter-spacing:-0.5px;}
         .logo span{color:var(--accent);}
         .status{display:flex;align-items:center;gap:8px;}
         .dot{width:8px;height:8px;border-radius:50%;background:${apiStatus==='online'?'#4ade80':'#ff6b35'};${apiStatus==='online'?'animation:pulse 2s infinite;':''}}
         .status-label{font-size:11px;color:${apiStatus==='online'?'#4ade80':'var(--accent2)'};text-transform:uppercase;letter-spacing:1px;}
-        .container{max-width:900px;margin:0 auto;padding:40px 24px;}
+        .container{max-width:900px;margin:0 auto;padding:32px 20px 40px;}
         .steps{display:flex;gap:4px;margin-bottom:48px;}
         .step{flex:1;height:3px;background:var(--border);border-radius:2px;transition:background 0.4s;}
         .step.active{background:var(--accent);}
@@ -305,6 +311,34 @@ export default function Home() {
         .error-msg{color:var(--accent2);font-size:12px;margin-top:8px;}
         .charges-info{margin-top:8px;font-size:11px;color:var(--muted);}
         .signature{margin-top:32px;text-align:center;font-size:13px;font-family:'Syne',sans-serif;letter-spacing:0.04em;color:var(--muted);opacity:0.7;}
+
+        @media (max-width: 640px) {
+          header{
+            padding:16px 16px 12px;
+            flex-direction:column;
+            align-items:flex-start;
+            gap:8px;
+          }
+          .logo{
+            font-size:18px;
+          }
+          .status-label{
+            font-size:10px;
+          }
+          .container{
+            padding:24px 16px 32px;
+          }
+          .section-title{
+            font-size:22px;
+          }
+          .upload-zone{
+            padding:40px 20px;
+          }
+          .row-actions{
+            flex-direction:column;
+            align-items:stretch;
+          }
+        }
       `}</style>
 
       <header>
