@@ -107,8 +107,10 @@ export default function Home() {
   const [error, setError] = useState('');
   const [apiStatus, setApiStatus] = useState('online');
   const [receiptTotal, setReceiptTotal] = useState(null);
+  const [highlightUnassignedRow, setHighlightUnassignedRow] = useState(null);
   const fileInputRef = useRef();
   const canvasRef = useRef();
+  const firstUnassignedRowRef = useRef(null);
 
   const handleFile = (f) => {
     if (!f) return;
@@ -183,6 +185,7 @@ export default function Home() {
   const extraTotal = (charges.tax||0) + (charges.service||0) + (Array.isArray(charges.others) ? charges.others : []).reduce((a,c)=>a+(c?.amount||0),0);
   const grandTotal = itemsSubtotal + extraTotal;
   const hasUnassigned = (Array.isArray(items) ? items : []).some((_, i) => (assignments[i]||[]).length === 0);
+  const firstUnassignedIndex = (Array.isArray(items) ? items : []).findIndex((_, i) => (assignments[i]||[]).length === 0);
 
   const calcResults = () => {
     const totals = {}, breakdown = {};
@@ -312,6 +315,8 @@ export default function Home() {
         .total-check.mismatch{background:rgba(255,107,53,0.1);border:1px solid rgba(255,107,53,0.3);color:var(--accent2);}
         .total-check.unknown{background:var(--surface2);border:1px solid var(--border);color:var(--muted);}
         .warn{background:rgba(255,107,53,0.1);border:1px solid rgba(255,107,53,0.3);color:var(--accent2);border-radius:8px;padding:10px 14px;font-size:12px;margin-bottom:16px;}
+        .tr-highlight-unassigned{background:rgba(255,107,53,0.2);animation:highlightRow 0.5s ease;}
+        @keyframes highlightRow{0%{background:rgba(255,107,53,0.4);}100%{background:rgba(255,107,53,0.2);}}
         .summary-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:40px;}
         .scard{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;transition:border-color 0.2s;}
         .scard:hover{border-color:var(--accent);}
@@ -441,7 +446,7 @@ export default function Home() {
           <div>
             <div className="section-title">Who ate what?</div>
             <div className="section-sub">Select everyone who shared each item — split equally</div>
-            {hasUnassigned && <div className="warn">⚠ Some items have no one assigned yet</div>}
+            {hasUnassigned && <div className="warn">⚠ Please choose who ate what for all the menus.</div>}
             <table className="items-table">
               <thead><tr><th>Item</th><th>Price</th><th>Split between</th><th>Per person</th></tr></thead>
               <tbody>
@@ -449,8 +454,14 @@ export default function Home() {
                   const assigned = assignments[i]||[];
                   const price = item?.price ?? 0;
                   const per = assigned.length > 0 ? price/assigned.length : null;
+                  const isFirstUnassigned = i === firstUnassignedIndex;
+                  const isHighlighted = highlightUnassignedRow === i;
                   return (
-                    <tr key={`item-${i}`}>
+                    <tr
+                      key={`item-${i}`}
+                      ref={isFirstUnassigned ? firstUnassignedRowRef : undefined}
+                      className={isHighlighted ? 'tr-highlight-unassigned' : ''}
+                    >
                       <td>{item?.name ?? '—'}</td>
                       <td className="item-price">{fc(price)}</td>
                       <td>
@@ -496,7 +507,20 @@ export default function Home() {
               </div>
             )}
             <div className="row-actions">
-              <button className="btn btn-primary" disabled={hasUnassigned} onClick={() => setPanel(4)}>Calculate Split →</button>
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  if (hasUnassigned) {
+                    setHighlightUnassignedRow(firstUnassignedIndex);
+                    setTimeout(() => setHighlightUnassignedRow(null), 2500);
+                    firstUnassignedRowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    return;
+                  }
+                  setPanel(4);
+                }}
+              >
+                Calculate Split →
+              </button>
               <button className="btn btn-ghost" onClick={() => setPanel(2)}>← Back</button>
             </div>
           </div>
