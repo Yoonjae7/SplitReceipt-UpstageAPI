@@ -6,33 +6,34 @@ const COLORS = ['#c8f135','#ff6b35','#35b5ff','#ff35a8','#35ffd4','#ffcc35','#a8
 function parseItems(data) {
   const result = [];
   const charges = { tax: 0, service: 0, others: [] };
+  let receiptTotal = null;
   
   try {
-    const fields = data?.fields || [];
+    const rawFields = Array.isArray(data?.fields) ? data.fields : (Array.isArray(data?.result?.fields) ? data.result.fields : []);
+    const fields = rawFields.filter(Boolean);
     
     // 메뉴 아이템: type이 "group"인 것들
     const groups = fields.filter(f => f.type === 'group');
     for (const group of groups) {
       const props = group.properties || [];
-      const nameProp = props.find(p => p.key.includes('product_name'));
-      const priceProp = props.find(p => p.key.includes('unit_product_total_price_before_discount')) 
-                     || props.find(p => p.key.includes('unit_product_price'));
+      const nameProp = props.find(p => p && p.key && String(p.key).includes('product_name'));
+      const priceProp = props.find(p => p && p.key && String(p.key).includes('unit_product_total_price_before_discount')) 
+                     || props.find(p => p && p.key && String(p.key).includes('unit_product_price'));
       
-      const name = nameProp?.refinedValue?.trim();
-      const price = parseFloat(String(priceProp?.refinedValue || '').replace(/[^0-9.]/g, ''));
+      const nameRaw = nameProp != null ? String(nameProp.refinedValue ?? '').trim() : '';
+      const price = parseFloat(String(priceProp?.refinedValue ?? '').replace(/[^0-9.]/g, ''));
+      const name = nameRaw.replace(/^\d+x/, '').replace(/CHF$/, '').trim();
       
-      if (name && price > 0) {
-        // 이름에서 "1x", "2x" 같은 prefix 정리
-        const cleanName = name.replace(/^\d+x/, '').replace(/CHF$/, '').trim();
-        result.push({ name: cleanName, price });
+      if (name && !Number.isNaN(price) && price > 0) {
+        result.push({ name, price });
       }
     }
     
     // 세금
-    const taxField = fields.find(f => f.key === 'total.tax_price' && f.type === 'content');
-    if (taxField) {
-      const tax = parseFloat(String(taxField.refinedValue).replace(/[^0-9.]/g, ''));
-      if (tax > 0) charges.tax = tax;
+    const taxField = fields.find(f => f && f.key === 'total.tax_price' && f.type === 'content');
+    if (taxField != null) {
+      const tax = parseFloat(String(taxField.refinedValue ?? '').replace(/[^0-9.]/g, ''));
+      if (!Number.isNaN(tax) && tax > 0) charges.tax = tax;
     }
 
     // 서비스 차지 (service charge / service fee 등)
@@ -62,11 +63,12 @@ function parseItems(data) {
       });
     }
 
-    // Upstage total.charged_price가 있을 경우, 서비스 차지를 못 찾았으면 역산해서 보정
+    // Receipt total from API (for user to verify)
     const totalField = fields.find(f => f.key === 'total.charged_price' && f.type === 'content');
     if (totalField) {
       const apiTotal = parseFloat(String(totalField.refinedValue ?? '').replace(/[^0-9.\-]/g, '')) || 0;
       if (apiTotal > 0) {
+        receiptTotal = apiTotal;
         const itemsSubtotal = result.reduce((a, item) => a + (item.price || 0), 0);
         const othersSum = (charges.others || []).reduce((a, c) => a + (c.amount || 0), 0);
         const inferredService = apiTotal - (itemsSubtotal + (charges.tax || 0) + othersSum);
@@ -80,15 +82,16 @@ function parseItems(data) {
   
   // If nothing valid was parsed, return empty items so caller can show a proper error
   if (result.length === 0) {
-    return { items: [], charges };
+    return { items: [], charges, receiptTotal: null };
   }
   
-  return { items: result, charges };
+  return { items: result, charges, receiptTotal };
 }
 
 function fc(n) {
-  if (isNaN(n)) return '—';
-  return `$${parseFloat(n).toFixed(2)}`;
+  const num = typeof n === 'number' ? n : parseFloat(n);
+  if (num == null || Number.isNaN(num)) return '—';
+  return `$${Number(num).toFixed(2)}`;
 }
 
 export default function Home() {
@@ -103,6 +106,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [apiStatus, setApiStatus] = useState('online');
+  const [receiptTotal, setReceiptTotal] = useState(null);
   const fileInputRef = useRef();
   const canvasRef = useRef();
 
@@ -123,9 +127,14 @@ export default function Home() {
       const fd = new FormData();
       fd.append('document', file);
       const res = await fetch('/api/scan', { method: 'POST', body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
-      const parsed = parseItems(data);
+      let data;
+      try {
+        data = await res.json();
+      } catch (_) {
+        throw new Error('Invalid response from server. Try again.');
+      }
+      if (!res.ok) throw new Error(data?.error || `Error ${res.status}`);
+      const parsed = parseItems(data || {});
       if (!parsed.items || parsed.items.length === 0) {
         setError(`This isn't a reciept, are you dumb or something?`);
         setApiStatus('error');
@@ -133,6 +142,7 @@ export default function Home() {
       }
       setItems(parsed.items);
       setCharges(parsed.charges);
+      setReceiptTotal(parsed.receiptTotal ?? null);
       const a = {};
       parsed.items.forEach((_, i) => { a[i] = []; });
       setAssignments(a);
@@ -169,62 +179,74 @@ export default function Home() {
     });
   };
 
-  const itemsSubtotal = items.reduce((a, item) => a + item.price, 0);
-  const extraTotal = (charges.tax||0) + (charges.service||0) + (charges.others||[]).reduce((a,c)=>a+(c.amount||0),0);
+  const itemsSubtotal = (Array.isArray(items) ? items : []).reduce((a, item) => a + (item?.price ?? 0), 0);
+  const extraTotal = (charges.tax||0) + (charges.service||0) + (Array.isArray(charges.others) ? charges.others : []).reduce((a,c)=>a+(c?.amount||0),0);
   const grandTotal = itemsSubtotal + extraTotal;
-  const hasUnassigned = items.some((_, i) => (assignments[i]||[]).length === 0);
+  const hasUnassigned = (Array.isArray(items) ? items : []).some((_, i) => (assignments[i]||[]).length === 0);
 
   const calcResults = () => {
     const totals = {}, breakdown = {};
-    people.forEach(p => { totals[p] = 0; breakdown[p] = []; });
-    items.forEach((item, i) => {
+    const peopleList = Array.isArray(people) ? people : [];
+    const itemsList = Array.isArray(items) ? items : [];
+    peopleList.forEach(p => { totals[p] = 0; breakdown[p] = []; });
+    itemsList.forEach((item, i) => {
       const assigned = assignments[i] || [];
       if (!assigned.length) return;
-      const share = item.price / assigned.length;
+      const price = item?.price ?? 0;
+      const share = price / assigned.length;
       assigned.forEach(name => {
-        totals[name] += share;
-        breakdown[name].push({ name: item.name, share, count: assigned.length });
+        totals[name] = (totals[name] ?? 0) + share;
+        if (!breakdown[name]) breakdown[name] = [];
+        breakdown[name].push({ name: item?.name ?? 'Item', share, count: assigned.length });
       });
     });
-    const n = people.length || 1;
+    const n = peopleList.length || 1;
     const perTax = (charges.tax||0)/n, perSvc = (charges.service||0)/n;
-    const perOther = (charges.others||[]).reduce((a,c)=>a+(c.amount||0),0)/n;
-    people.forEach(name => {
-      if (perTax) { totals[name]+=perTax; breakdown[name].push({name:'Tax',share:perTax,count:n}); }
-      if (perSvc) { totals[name]+=perSvc; breakdown[name].push({name:'Service',share:perSvc,count:n}); }
-      if (perOther) { totals[name]+=perOther; breakdown[name].push({name:'Other',share:perOther,count:n}); }
+    const perOther = (Array.isArray(charges.others) ? charges.others : []).reduce((a,c)=>a+(c?.amount||0),0)/n;
+    peopleList.forEach(name => {
+      if (perTax) { totals[name] = (totals[name] ?? 0) + perTax; (breakdown[name] = breakdown[name] || []).push({name:'Tax',share:perTax,count:n}); }
+      if (perSvc) { totals[name] = (totals[name] ?? 0) + perSvc; (breakdown[name] = breakdown[name] || []).push({name:'Service',share:perSvc,count:n}); }
+      if (perOther) { totals[name] = (totals[name] ?? 0) + perOther; (breakdown[name] = breakdown[name] || []).push({name:'Other',share:perOther,count:n}); }
     });
     return { totals, breakdown };
   };
 
   useEffect(() => {
-    if (panel !== 4 || !canvasRef.current) return;
+    if (panel !== 4 || !canvasRef.current || !Array.isArray(people) || people.length === 0) return;
     const { totals } = calcResults();
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
     const total = Object.values(totals).reduce((a,b)=>a+b,0);
     if (total === 0) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
     let angle = -Math.PI/2;
     ctx.clearRect(0,0,200,200);
     people.forEach((name,i) => {
-      const slice = (totals[name]/total)*Math.PI*2;
-      ctx.beginPath(); ctx.moveTo(100,100);
+      const val = totals[name];
+      if (val == null || Number.isNaN(val)) return;
+      const slice = (val / total) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(100,100);
       ctx.arc(100,100,90,angle,angle+slice);
       ctx.closePath();
-      ctx.fillStyle = COLORS[i%COLORS.length];
+      ctx.fillStyle = COLORS[i % COLORS.length];
       ctx.fill();
       angle += slice;
     });
-  }, [panel]);
+  }, [panel, people, items, assignments, charges]);
 
-  const { totals, breakdown } = panel === 4 ? calcResults() : { totals: {}, breakdown: {} };
-  const maxTotal = panel === 4 ? Math.max(...Object.values(totals), 0) : 0;
+  const { totals = {}, breakdown = {} } = panel === 4 ? calcResults() : {};
+  const totalsValues = Object.values(totals);
+  const maxTotal = panel === 4 && totalsValues.length > 0 ? Math.max(...totalsValues, 0) : 0;
 
   const reset = () => {
     setPeople([]); setItems([]); setAssignments({}); setFile(null);
-    setPreview(null); setCharges({tax:0,service:0,others:[]}); 
+    setPreview(null); setCharges({tax:0,service:0,others:[]}); setReceiptTotal(null);
     setPersonInput(''); setError(''); setApiStatus('online'); setPanel(1);
   };
+
+  const totalMatch = receiptTotal != null && Math.abs(grandTotal - receiptTotal) < 0.02;
+  const totalMismatch = receiptTotal != null && Math.abs(grandTotal - receiptTotal) >= 0.02;
 
   const pulse = apiStatus === 'online' ? `
     @keyframes pulse {
@@ -240,7 +262,6 @@ export default function Home() {
         <meta name="description" content="AI powered bill splitter by Yoonjae" />
         <meta property="og:title" content="SplitReceipt by Yoonjae" />
         <meta property="og:description" content="AI powered bill splitter by Yoonjae" />
-        <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
       </Head>
       <style>{`
         ${pulse}
@@ -286,6 +307,10 @@ export default function Home() {
         .total-row{display:flex;justify-content:space-between;align-items:center;padding:16px 12px;background:var(--surface2);border-radius:8px;margin-top:8px;}
         .total-label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;}
         .total-value{font-family:'Syne',sans-serif;font-size:20px;font-weight:800;color:var(--accent);}
+        .total-check{margin-top:10px;padding:10px 14px;border-radius:8px;font-size:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+        .total-check.match{background:rgba(74,222,128,0.12);border:1px solid rgba(74,222,128,0.4);color:#4ade80;}
+        .total-check.mismatch{background:rgba(255,107,53,0.1);border:1px solid rgba(255,107,53,0.3);color:var(--accent2);}
+        .total-check.unknown{background:var(--surface2);border:1px solid var(--border);color:var(--muted);}
         .warn{background:rgba(255,107,53,0.1);border:1px solid rgba(255,107,53,0.3);color:var(--accent2);border-radius:8px;padding:10px 14px;font-size:12px;margin-bottom:16px;}
         .summary-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:40px;}
         .scard{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;transition:border-color 0.2s;}
@@ -384,10 +409,10 @@ export default function Home() {
             <div className="section-sub">Add everyone at the table</div>
             <div className="people-row">
               {people.map((name,i) => (
-                <div key={name} className="person-tag" style={{borderColor:COLORS[i%COLORS.length]+'44'}}>
+                <div key={`person-${i}-${name}`} className="person-tag" style={{borderColor:COLORS[i%COLORS.length]+'44'}}>
                   <span style={{color:COLORS[i%COLORS.length],fontSize:'8px'}}>●</span>
                   {name}
-                  <button className="remove-btn" onClick={() => removePerson(i)}>×</button>
+                  <button type="button" className="remove-btn" onClick={() => removePerson(i)}>×</button>
                 </div>
               ))}
             </div>
@@ -422,16 +447,17 @@ export default function Home() {
               <tbody>
                 {items.map((item,i) => {
                   const assigned = assignments[i]||[];
-                  const per = assigned.length > 0 ? item.price/assigned.length : null;
+                  const price = item?.price ?? 0;
+                  const per = assigned.length > 0 ? price/assigned.length : null;
                   return (
-                    <tr key={i}>
-                      <td>{item.name}</td>
-                      <td className="item-price">{fc(item.price)}</td>
+                    <tr key={`item-${i}`}>
+                      <td>{item?.name ?? '—'}</td>
+                      <td className="item-price">{fc(price)}</td>
                       <td>
                         <div className="person-checks">
                           {people.map((name,pi) => (
-                            <div key={name} className={`pcheck${assigned.includes(name)?' checked':''}`}
-                              onClick={() => toggleAssign(i,name)}>
+                            <div key={`assign-${i}-${pi}-${name}`} className={`pcheck${assigned.includes(name)?' checked':''}`}
+                              onClick={() => toggleAssign(i,name)} role="button" tabIndex={0} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleAssign(i,name); } }}>
                               <span style={{color:COLORS[pi%COLORS.length]}}>{name}</span>
                             </div>
                           ))}
@@ -456,6 +482,19 @@ export default function Home() {
                 {charges.service>0 && ` · Service: ${fc(charges.service)}`}
               </div>
             )}
+            {receiptTotal != null ? (
+              <div className={`total-check ${totalMatch ? 'match' : totalMismatch ? 'mismatch' : 'unknown'}`}>
+                {totalMatch && <span>✓</span>}
+                {totalMismatch && <span>⚠</span>}
+                <span>Receipt total: {fc(receiptTotal)} · Our total: {fc(grandTotal)}</span>
+                {totalMatch && <span>Match</span>}
+                {totalMismatch && <span>Doesn&apos;t match — check receipt</span>}
+              </div>
+            ) : (
+              <div className="total-check unknown">
+                <span>Receipt total not detected — verify against your receipt if needed.</span>
+              </div>
+            )}
             <div className="row-actions">
               <button className="btn btn-primary" disabled={hasUnassigned} onClick={() => setPanel(4)}>Calculate Split →</button>
               <button className="btn btn-ghost" onClick={() => setPanel(2)}>← Back</button>
@@ -467,14 +506,23 @@ export default function Home() {
           <div>
             <div className="section-title">Here's the split 💸</div>
             <div className="section-sub">Who owes what</div>
+            {receiptTotal != null && (
+              <div className={`total-check ${totalMatch ? 'match' : totalMismatch ? 'mismatch' : 'unknown'}`} style={{marginBottom: 20}}>
+                {totalMatch && <span>✓</span>}
+                {totalMismatch && <span>⚠</span>}
+                <span>Receipt total: {fc(receiptTotal)} · Our total: {fc(grandTotal)}</span>
+                {totalMatch && <span>Match</span>}
+                {totalMismatch && <span>Doesn&apos;t match — check receipt</span>}
+              </div>
+            )}
             <div className="summary-grid">
               {people.map((name,i) => (
-                <div key={name} className="scard" style={{borderColor:COLORS[i%COLORS.length]+'44'}}>
+                <div key={`result-${i}-${name}`} className="scard" style={{borderColor:COLORS[i%COLORS.length]+'44'}}>
                   <div className="sname" style={{color:COLORS[i%COLORS.length]}}>{name}</div>
-                  <div className="samount">{fc(totals[name])}</div>
+                  <div className="samount">{fc(totals[name] ?? 0)}</div>
                   <div className="sitems">
                     {(breakdown[name]||[]).map((b,j) => (
-                      <div key={j}>{b.name}{b.count>1?` ÷${b.count}`:''} = {fc(b.share)}</div>
+                      <div key={`b-${j}-${b?.name ?? j}`}>{b?.name ?? 'Item'}{b?.count>1 ? ` ÷${b.count}` : ''} = {fc(b?.share ?? 0)}</div>
                     ))}
                   </div>
                 </div>
@@ -483,11 +531,11 @@ export default function Home() {
             <div className="chart-section">
               <div className="chart-title">Amount per person</div>
               {people.map((name,i) => (
-                <div key={name} className="bar-row">
+                <div key={`bar-${i}-${name}`} className="bar-row">
                   <div className="bar-label">{name}</div>
                   <div className="bar-track">
-                    <div className="bar-fill" style={{width:`${maxTotal>0?(totals[name]/maxTotal*100):0}%`,background:COLORS[i%COLORS.length]}}>
-                      {fc(totals[name])}
+                    <div className="bar-fill" style={{width:`${maxTotal>0 ? ((totals[name]??0)/maxTotal*100) : 0}%`,background:COLORS[i%COLORS.length]}}>
+                      {fc(totals[name] ?? 0)}
                     </div>
                   </div>
                 </div>
@@ -500,10 +548,11 @@ export default function Home() {
                 <div className="pie-legend">
                   {people.map((name,i) => {
                     const tot = Object.values(totals).reduce((a,b)=>a+b,0);
+                    const pct = tot > 0 ? ((totals[name] ?? 0) / tot * 100).toFixed(1) : '0';
                     return (
-                      <div key={name} className="legend-item">
+                      <div key={`legend-${i}-${name}`} className="legend-item">
                         <div className="legend-dot" style={{background:COLORS[i%COLORS.length]}}></div>
-                        <span>{name} — {tot>0?((totals[name]/tot)*100).toFixed(1):0}%</span>
+                        <span>{name} — {pct}%</span>
                       </div>
                     );
                   })}
@@ -512,6 +561,7 @@ export default function Home() {
             </div>
             <div className="row-actions">
               <button className="btn btn-primary" onClick={reset}>Start Over</button>
+              <button className="btn btn-ghost" onClick={() => setPanel(3)}>← Back to edit who ate what</button>
             </div>
           </div>
         )}

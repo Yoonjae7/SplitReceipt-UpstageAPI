@@ -31,13 +31,16 @@ export default async function handler(req, res) {
         body: formData,
       });
 
-      const data = await upstageRes.json();
-      console.log('Upstage raw response:', JSON.stringify(data, null, 2));
-
-      if (!upstageRes.ok) return res.status(upstageRes.status).json({ error: data?.message || 'Upstage error', detail: data });
+      let data;
+      try {
+        data = await upstageRes.json();
+      } catch (_) {
+        return res.status(502).json({ error: 'Invalid response from Upstage API.' });
+      }
+      if (!upstageRes.ok) return res.status(upstageRes.status).json({ error: data?.message || 'Upstage error' });
       return res.status(200).json(data);
     } catch (e) {
-      return res.status(500).json({ error: e.message });
+      return res.status(500).json({ error: e?.message || 'Server error' });
     }
   });
 }
